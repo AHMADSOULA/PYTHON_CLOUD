@@ -1,7 +1,7 @@
 import asyncio
 import os
 import re
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs
 from telethon import TelegramClient, events
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import expect
@@ -114,7 +114,7 @@ def build_darktunnel_uri_with_host(base_uri: str, new_host: str) -> str:
         return None
 
 # ==========================================
-# 🔔 الإشعارات والأخطاء
+# 🔔 الإشعارات ومعالجة الأخطاء
 # ==========================================
 async def notify(chat_id, msg):
     try:
@@ -127,22 +127,28 @@ async def handle_error(page, chat_id, step_name, error_msg):
     print(f"Error at {step_name}: {error_msg}")
     safe_error_msg = str(error_msg)[:900] + "\n... (تم تقصير الرسالة)" if len(str(error_msg)) > 800 else str(error_msg)
     
-    # تصوير عند الخطأ فقط
+    screenshot_sent = False
     if page:
         try:
-            screenshot_path = f"error_{step_name}.png"
-            await page.screenshot(path=screenshot_path, full_page=False)
-            await client.send_file(
-                chat_id, 
-                file=screenshot_path, 
-                caption=f"❌ حدث خطأ في مرحلة:\n**{step_name}**\n\nتفاصيل الخطأ:\n`{safe_error_msg}`"
-            )
-            os.remove(screenshot_path)
-            return
-        except Exception:
-            pass
-    
-    await client.send_message(chat_id, f"❌ حدث خطأ في مرحلة **{step_name}**:\n`{safe_error_msg}`")
+            # التحقق مما إذا كانت الصفحة مغلقة أو المتصفح انهار قبل التصوير
+            if not page.is_closed():
+                screenshot_path = f"error_{step_name}.png"
+                await page.screenshot(path=screenshot_path, full_page=False, timeout=5000)
+                await client.send_file(
+                    chat_id, 
+                    file=screenshot_path, 
+                    caption=f"❌ حدث خطأ في مرحلة:\n**{step_name}**\n\nتفاصيل الخطأ:\n`{safe_error_msg}`"
+                )
+                os.remove(screenshot_path)
+                screenshot_sent = True
+        except Exception as e:
+            print(f"⚠️ تعذر التقاط صورة بسبب انهيار المتصفح: {e}")
+            
+    if not screenshot_sent:
+        await client.send_message(
+            chat_id, 
+            f"❌ حدث خطأ في مرحلة **{step_name}**:\n`{safe_error_msg}`\n\n⚠️ (تعذر التقاط صورة للشاشة لأن المتصفح انهار أو أغلق)."
+        )
 
 # ==========================================
 # 🛠️ الدوال المساعدة
@@ -160,7 +166,7 @@ def extract_project_id(url):
     return None
 
 async def handle_tos_dialog(page):
-    """دالة ذكية للتعامل مع نافذة الشروط إذا ظهرت فجأة"""
+    """دالة ذكية للتعامل مع نافذة الشروط (Welcome) إذا ظهرت"""
     agree_btn = page.get_by_role("button", name="Agree and continue")
     try:
         if await agree_btn.is_visible(timeout=4000):
@@ -209,7 +215,6 @@ async def step3_enable_api(page, project_id, authuser):
     await page.goto(api_url, wait_until="domcontentloaded")
     await page.wait_for_timeout(2000)
     
-    # فحص إذا كانت الشروط ظهرت فوراً
     await handle_tos_dialog(page)
     
     enable_btn = page.get_by_role("button", name="Enable")
@@ -223,7 +228,6 @@ async def step3_enable_api(page, project_id, authuser):
             await enable_btn.click()
             await page.wait_for_timeout(2500)
             
-            # 🔥 السر هنا: بعد الضغط على Enable، نقوم بفحص نافذة الشروط مجدداً قبل الانتظار
             await handle_tos_dialog(page)
             
             try:
@@ -282,7 +286,6 @@ async def process_sso_link(chat_id, sso_url):
         await client.send_message(chat_id, "❌ لم يتم العثور على Project ID في الرابط.")
         return
 
-    # رسائل بسيطة ومحدودة
     await notify(chat_id, "⏳ جاري تجهيز المتصفح وفتح الرابط...")
 
     temp_dir = tempfile.mkdtemp()
@@ -290,11 +293,13 @@ async def process_sso_link(chat_id, sso_url):
 
     async with async_playwright() as p:
         try:
+            # 🔥 إعدادات الذاكرة المحسنة لمنع انهيار المتصفح Target crashed
             args = [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
+                "--disable-dev-shm-usage",  # يحل مشكلة نفاد الذاكرة المشتركة في Docker
+                "--single-process",          # يقلل استهلاك الذاكرة (مهم جداً لـ Railway)
                 "--disable-gpu",
                 "--disable-software-rasterizer",
                 "--disable-accelerated-2d-canvas",
@@ -314,7 +319,7 @@ async def process_sso_link(chat_id, sso_url):
                 "--metrics-recording-only",
                 "--safebrowsing-disable-auto-update",
                 "--renderer-process-limit=1",
-                "--js-flags=--max-old-space-size=256",
+                "--js-flags=--max-old-space-size=512", # زيادة مساحة الذاكرة لجافا سكريبت
                 "--window-size=1920,1080",
                 f"--user-agent={USER_AGENT}",
             ]
@@ -355,7 +360,7 @@ async def process_sso_link(chat_id, sso_url):
             await notify(chat_id, "⏳ جاري إنشاء خدمة Cloud Run...")
             await step4_create_cloud_run(page, project_id, authuser)
             
-            await notify(chat_id, "⏳ جاري انتظار استخراج رابط run.app...")
+            await notify(chat_id, "⏳ جاري انتظار استخراج رابط run.app (قد يستغرق دقيقة)...")
             final_url = await step5_get_deployed_url(page)        
             domain = extract_domain_from_service_url(final_url)
             
