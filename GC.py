@@ -17,7 +17,7 @@ import shutil
 #===============================
 API_ID =  '35339972'
 API_HASH = 'fcbb29c0cdd4fbeb66ba017020e721cc'
-BOT_TOKEN = '8809379627:AAHlKoMBm5TyOnWcN4A2WvqXge7inl8dZD4'
+BOT_TOKEN = '9276555712:AAFArpLu5l1pomVLQ9zE54YjMfna1Z0NEys'
 
 client = TelegramClient('DDarkNetConfigs_1', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
