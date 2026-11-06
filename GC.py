@@ -13,7 +13,7 @@ import tempfile
 import shutil
 
 #===============================
-# ⚠️ ضع بياناتك هنا أو استخدم متغيرات البيئة
+# ✅ قراءة المتغيرات من البيئة (Railway Variables)
 API_ID = int(os.environ.get("API_ID", "123456"))
 API_HASH = os.environ.get("API_HASH", "your_api_hash")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")
@@ -34,7 +34,7 @@ DARK_FILES = [
     },
     {
         "name": "FREE_4H",
-        "uri": "darktunnel://eyJ0eXBlIjoiVkxFU1MiLCJuYW1lIjoiRlJFRV80SF_wn4e68J-HuCIsInZsZXNzVHVubmVsQ29uZmlnIjp7InYycmF5Q29uZmlnIjp7Imhvc3QiOiJhbHQxMy55dDMuZ2dwaHQuY29tIiwicG9ydCI6NDQzLCJ1dWlkIjoiYWFhYTExMTEtYmJiYi00Y2NjLThkZGQtZWVlZWZmZmYwMDAwIiwic2VydmVyTmFtZUluZGljYXRpb24iOiJhbHQxMy55dDMuZ2dwaHQuY29tIiwid3NQYXRoIjoiL1RlbGVncmFtL0BBTTJfRDMvQEFITUFEMzIxNCJ9LCJpbmplY3RDb25maWciOnsiZW5hYmxlZCI6dHJ1ZSwibW9kZSI6IlBST1hZIiwicHJveHlIb3N0IjoiMTU3LjI0MC45LjM5IiwicGF5bG9hZCI6IkNPTk5FQ1QgW2hvc3RdOltwb3J0XSBIVFRQLzEuMVtjcmxmXXgtY29ubmVjdGVkLXRvOiAzNC4xNDMuNzIuMltjcmxmXXByb3h5LWNvbm5lY3Rpb246IGtlZXAtYWxpdmVbY3JsZl1jb25uZWN0aW9uOiBrZWVwLWFsaXZlW2Nyb2ZdeC1pb3JnLWJzaWQ6IEBBTTJfRDNbY3JsZl1bY3JsZl0ifX19",
+        "uri": "darktunnel://eyJ0eXBlIjoiVkxFU1MiLCJuYW1lIjoiRlJFRV80SF_wn4e68J-HuCIsInZsZXNzVHVubmVsQ29uZmlnIjp7InYycmF5Q29uZmlnIjp7Imhvc3QiOiJhbHQxMy55dDMuZ2dwaHQuY29tIiwicG9ydCI6NDQzLCJ1dWlkIjoiYWFhYWExMTEtYmJiYi00Y2NjLThkZGQtZWVlZWZmZmYwMDAwIiwic2VydmVyTmFtZUluZGljYXRpb24iOiJhbHQxMy55dDMuZ2dwaHQuY29tIiwid3NQYXRoIjoiL1RlbGVncmFtL0BBTTJfRDMvQEFITUFEMzIxNCJ9LCJpbmplY3RDb25maWciOnsiZW5hYmxlZCI6dHJ1ZSwibW9kZSI6IlBST1hZIiwicHJveHlIb3N0IjoiMTU3LjI0MC45LjM5IiwicGF5bG9hZCI6IkNPTk5FQ1QgW2hvc3RdOltwb3J0XSBIVFRQLzEuMVtjcmxmXXgtY29ubmVjdGVkLXRvOiAzNC4xNDMuNzIuMltjcmxmXXByb3h5LWNvbm5lY3Rpb246IGtlZXAtYWxpdmVbY3JsZl1jb25uZWN0aW9uOiBrZWVwLWFsaXZlW2Nyb2ZdeC1pb3JnLWJzaWQ6IEBBTTJfRDNbY3JsZl1bY3JsZl0ifX19",
     },
 ]
 
@@ -61,7 +61,7 @@ def build_darktunnel_uri_with_host(base_uri: str, new_host: str) -> str:
         return None
 
 # ==========================================
-# 🔒 قفل لمنع فتح أكثر من متصفح في نفس الوقت (لحماية السيرفر)
+# 🔒 قفل لمنع فتح أكثر من متصفح في نفس الوقت
 # ==========================================
 browser_lock = asyncio.Lock()
 
@@ -82,7 +82,6 @@ async def handle_error(page, chat_id, step_name, error_msg):
     print(f"Error at {step_name}: {error_msg}")
     safe_error_msg = str(error_msg)[:900] + "\n... (تم تقصير الرسالة)" if len(str(error_msg)) > 800 else str(error_msg)
     
-    # تصوير الشاشة بأمان
     screenshot_sent = False
     if page:
         try:
@@ -102,11 +101,11 @@ async def handle_error(page, chat_id, step_name, error_msg):
     if not screenshot_sent:
         await client.send_message(
             chat_id, 
-            f"❌ حدث خطأ في مرحلة **{step_name}**:\n`{safe_error_msg}`\n\n⚠️ (تعذر التقاط صورة للشاشة لأن المتصفح انهار أو أغلق)."
+            f"❌ حدث خطأ في مرحلة **{step_name}**:\n`{safe_error_msg}`\n\n⚠️ (تعذر التقاط صورة للشاشة)."
         )
 
 async def handle_tos_dialog(page):
-    """دالة ذكية للتعامل مع نافذة الشروط (Welcome) إذا ظهرت"""
+    """دالة ذكية للتعامل مع نافذة الشروط إذا ظهرت"""
     agree_btn = page.get_by_role("button", name="Agree and continue")
     try:
         if await agree_btn.is_visible(timeout=4000):
@@ -154,7 +153,7 @@ async def step3_enable_api(page, project_id, authuser):
     await page.goto(api_url, wait_until="domcontentloaded")
     await page.wait_for_timeout(2000)
     
-    await handle_tos_dialog(page) # فحص الشروط
+    await handle_tos_dialog(page)
     
     enable_btn = page.get_by_role("button", name="Enable")
     manage_btn = page.get_by_role("button", name="Manage")
@@ -166,7 +165,7 @@ async def step3_enable_api(page, project_id, authuser):
             await enable_btn.click()
             await page.wait_for_timeout(2500)
             
-            await handle_tos_dialog(page) # فحص الشروط مرة أخرى بعد التفعيل
+            await handle_tos_dialog(page)
             
             try:
                 await expect(manage_btn.or_(disable_btn)).to_be_visible(timeout=45000)
@@ -218,7 +217,7 @@ async def step5_get_deployed_url(page):
 # 🎯 المعالج الرئيسي
 # ==========================================
 async def process_sso_link(chat_id, sso_url):
-    async with browser_lock: # قفل لمنع تداخل المتصفحات
+    async with browser_lock:
         project_id = extract_project_id(sso_url)
         if not project_id:
             await client.send_message(chat_id, "❌ لم يتم العثور على Project ID في الرابط.")
@@ -230,11 +229,10 @@ async def process_sso_link(chat_id, sso_url):
         
         async with async_playwright() as p:
             try:
-                # تشغيل المتصفح بوضع visible (لأنك تستخدم Xvfb)
+                # ✅ تم حذف channel='chrome' وتم تحويل headless إلى True
                 context = await p.chromium.launch_persistent_context(
                     user_data_dir=temp_dir,
-                    channel='chrome',
-                    headless=False,
+                    headless=True, 
                     args=[
                         '--no-sandbox',
                         '--disable-setuid-sandbox',
@@ -275,7 +273,6 @@ async def process_sso_link(chat_id, sso_url):
                 
                 await client.send_message(chat_id, f"✅ **𝙃𝙚𝙧𝙚 𝙮𝙤𝙪 𝙜𝙤 𝙗𝙧𝙤**\n\n 𝙙𝙤𝙢𝙖𝙞𝙣 :\n `{domain}`", parse_mode='md')
                 
-                # إرسال ملفات Dark الثلاثة
                 for dark in DARK_FILES:
                     new_uri = build_darktunnel_uri_with_host(dark["uri"], domain)
                     if new_uri:
