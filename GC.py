@@ -293,13 +293,14 @@ async def process_sso_link(chat_id, sso_url):
 
     async with async_playwright() as p:
         try:
-            # 🔥 إعدادات الذاكرة المحسنة لمنع انهيار المتصفح Target crashed
+            # 🔥 خيارات الذاكرة الصارمة لمنع انهيار المتصفح Target crashed
             args = [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",  # يحل مشكلة نفاد الذاكرة المشتركة في Docker
-                "--single-process",          # يقلل استهلاك الذاكرة (مهم جداً لـ Railway)
+                "--disable-dev-shm-usage",   # حل مشكلة الذاكرة في Docker
+                "--no-zygote",               # يمنع انهيار العمليات الفرعية
+                "--single-process",          # يقلل الاستهلاك جداً (مهم لـ Railway)
                 "--disable-gpu",
                 "--disable-software-rasterizer",
                 "--disable-accelerated-2d-canvas",
@@ -319,8 +320,8 @@ async def process_sso_link(chat_id, sso_url):
                 "--metrics-recording-only",
                 "--safebrowsing-disable-auto-update",
                 "--renderer-process-limit=1",
-                "--js-flags=--max-old-space-size=512", # زيادة مساحة الذاكرة لجافا سكريبت
-                "--window-size=1920,1080",
+                "--js-flags=--max-old-space-size=512",
+                "--window-size=1280,720",    # تصغير الشاشة لتوفير الذاكرة
                 f"--user-agent={USER_AGENT}",
             ]
 
@@ -328,7 +329,7 @@ async def process_sso_link(chat_id, sso_url):
                 user_data_dir=temp_dir,
                 headless=True,
                 args=args,
-                viewport={"width": 1920, "height": 1080},
+                viewport={"width": 1280, "height": 720},
                 user_agent=USER_AGENT,
                 locale="en-US",
                 timezone_id="America/New_York",
