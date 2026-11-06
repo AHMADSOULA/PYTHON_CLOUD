@@ -1,0 +1,18 @@
+# متغيرات البيئة
+.env
+
+# جلسات Telethon
+*.session
+*.session-journal
+
+# لقطات شاشة الأخطاء
+error_*.png
+
+# ملفات Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Playwright
+playwright-report/
