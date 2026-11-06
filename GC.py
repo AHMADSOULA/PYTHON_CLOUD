@@ -1,35 +1,28 @@
 import asyncio
 import os
 import re
+from urllib.parse import urlparse, parse_qs
+from telethon import TelegramClient, events
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import expect
 import io
 import base64
 import json
+from telethon.tl.types import DocumentAttributeFilename
 import tempfile
 import shutil
-from urllib.parse import urlparse, parse_qs
-from telethon import TelegramClient, events
-from telethon.tl.types import DocumentAttributeFilename
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright.async_api import expect
-from dotenv import load_dotenv
 
-load_dotenv()
-
-# ===============================
-# ✅ المتغيرات الأساسية
-# ===============================
-API_ID = int(os.environ.get("API_ID", "0"))
-API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-
-if not API_ID or not API_HASH or not BOT_TOKEN:
-    raise SystemExit("❌ تأكد من إضافة API_ID, API_HASH, BOT_TOKEN في Railway Variables")
+#===============================
+# ⚠️ ضع بياناتك هنا أو استخدم متغيرات البيئة
+API_ID = int(os.environ.get("API_ID", "123456"))
+API_HASH = os.environ.get("API_HASH", "your_api_hash")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")
 
 client = TelegramClient('AM2_D3', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-# ===============================
-# 📦 ملفات DarkTunnel الثلاثة
-# ===============================
+# ==========================================
+# 📦 قائمة ملفات DarkTunnel الثلاثة
+# ==========================================
 DARK_FILES = [
     {
         "name": "YOUTUBE_4H",
@@ -49,309 +42,285 @@ def _b64_pad(s: str) -> str:
     s = s.strip()
     return s + ("=" * ((4 - (len(s) % 4)) % 4)) if s else s
 
-def build_darktunnel_uri(base_uri: str, new_host: str) -> str:
+def build_darktunnel_uri_with_host(base_uri: str, new_host: str) -> str:
     try:
         raw_b64 = _b64_pad(base_uri.split("darktunnel://", 1)[1].strip())
         data = json.loads(base64.b64decode(raw_b64).decode("utf-8"))
-        v2ray = data.get("vlessTunnelConfig", {}).get("v2rayConfig")
-        if v2ray and "wsHeaderHost" not in v2ray:
-            v2ray["wsHeaderHost"] = new_host
-        else:
-            stack = [data]
-            while stack:
-                cur = stack.pop()
-                if isinstance(cur, dict):
-                    if "wsHeaderHost" in cur: cur["wsHeaderHost"] = new_host
-                    stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
-                elif isinstance(cur, list):
-                    stack.extend(v for v in cur if isinstance(v, (dict, list)))
+        stack = [data]
+        while stack:
+            cur = stack.pop()
+            if isinstance(cur, dict):
+                if "wsHeaderHost" in cur: cur["wsHeaderHost"] = new_host
+                stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
+            elif isinstance(cur, list):
+                stack.extend(v for v in cur if isinstance(v, (dict, list)))
         raw = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         return "darktunnel://" + base64.b64encode(raw).decode("utf-8")
     except Exception as e:
         print(f"❌ build_darktunnel: {e}")
         return None
 
-# ===============================
-# ⚙️ نظام الطابور (Queue)
-# ===============================
-job_queue = asyncio.Queue()
-is_processing = False
+# ==========================================
+# 🔒 قفل لمنع فتح أكثر من متصفح في نفس الوقت (لحماية السيرفر)
+# ==========================================
+browser_lock = asyncio.Lock()
 
-# ===============================
+# ==========================================
 # 🛠️ دوال مساعدة
-# ===============================
-def extract_project_id(url: str) -> str:
-    m = re.search(r'(qwiklabs-gcp-[\w-]+)', url or "")
-    return m.group(1) if m else None
-
-def extract_domain(service_url: str) -> str:
+# ==========================================
+def extract_domain_from_service_url(service_url: str) -> str:
     s = (service_url or "").strip()
-    if s.startswith("http"): return urlparse(s).netloc.strip()
+    if s.startswith("http://") or s.startswith("https://"):
+        return urlparse(s).netloc.strip()
     return s.replace("http://", "").replace("https://", "").split("/")[0].strip()
 
-async def safe_screenshot(page, chat_id, error_msg, msg_obj=None):
+def extract_project_id(url):
+    match = re.search(r'(qwiklabs-gcp-[\w-]+)', url)
+    return match.group(1) if match else None
+
+async def handle_error(page, chat_id, step_name, error_msg):
+    print(f"Error at {step_name}: {error_msg}")
+    safe_error_msg = str(error_msg)[:900] + "\n... (تم تقصير الرسالة)" if len(str(error_msg)) > 800 else str(error_msg)
+    
+    # تصوير الشاشة بأمان
+    screenshot_sent = False
     if page:
         try:
             if not page.is_closed():
-                path = f"/tmp/error_{int(asyncio.get_event_loop().time())}.png"
-                await page.screenshot(path=path, full_page=False, timeout=5000)
-                await client.send_file(chat_id, path, caption=f"❌ خطأ:\n`{str(error_msg)[:900]}`")
-                os.remove(path)
-                return
+                screenshot_path = f"error_{step_name}.png"
+                await page.screenshot(path=screenshot_path, full_page=False, timeout=5000)
+                await client.send_file(
+                    chat_id, 
+                    file=screenshot_path, 
+                    caption=f"❌ حدث خطأ في مرحلة:\n**{step_name}**\n\nتفاصيل الخطأ:\n`{safe_error_msg}`"
+                )
+                os.remove(screenshot_path)
+                screenshot_sent = True
         except Exception as e:
-            print(f"⚠️ فشل التصوير: {e}")
+            print(f"⚠️ تعذر التقاط صورة: {e}")
+            
+    if not screenshot_sent:
+        await client.send_message(
+            chat_id, 
+            f"❌ حدث خطأ في مرحلة **{step_name}**:\n`{safe_error_msg}`\n\n⚠️ (تعذر التقاط صورة للشاشة لأن المتصفح انهار أو أغلق)."
+        )
+
+async def handle_tos_dialog(page):
+    """دالة ذكية للتعامل مع نافذة الشروط (Welcome) إذا ظهرت"""
+    agree_btn = page.get_by_role("button", name="Agree and continue")
+    try:
+        if await agree_btn.is_visible(timeout=4000):
+            print("⚠️ ظهرت نافذة الشروط - جاري تخطيها...")
+            checkboxes = page.get_by_role("checkbox")
+            count = await checkboxes.count()
+            if count >= 2:
+                await checkboxes.nth(0).click()
+                await asyncio.sleep(0.5)
+                await checkboxes.nth(1).click()
+            elif count == 1:
+                await checkboxes.nth(0).click()
+            
+            await agree_btn.click()
+            await page.wait_for_timeout(2000)
+            return True
+    except Exception:
+        pass
+    return False
+
+# ==========================================
+# 🚀 خطوات التنفيذ
+# ==========================================
+async def step1_welcome_screen(page):
+    try: await page.wait_for_load_state("networkidle", timeout=10000)
+    except: pass
+    await page.wait_for_timeout(2000)    
     
-    error_text = f"❌ خطأ (المتصفح انهار):\n`{str(error_msg)[:900]}`"
-    if msg_obj:
-        try: await msg_obj.edit(error_text)
-        except: await client.send_message(chat_id, error_text)
-    else:
-        await client.send_message(chat_id, error_text)
+    try: await page.keyboard.press("Enter")
+    except: pass
+    
+    try:
+        button = page.locator("text='I understand'")
+        if await button.is_visible(timeout=3000):
+            await button.click()
+    except: pass
+    
+    await handle_tos_dialog(page)
 
-# ===============================
-# 🚀 تنفيذ الخطوات (تحديث الرسالة)
-# ===============================
-async def process_sso(chat_id, sso_url, user_tag, msg):
-    project_id = extract_project_id(sso_url)
-    if not project_id:
-        return await msg.edit("❌ لم يتم العثور على Project ID.")
+async def step2_tos_and_country(page):
+    await handle_tos_dialog(page)
 
-    # تحديث الرسالة بطريقة تشبه الصورة
-    async def set_step(step_num, text, status=""):
-        status_icon = f" {status}" if status else ""
-        try:
-            await msg.edit(f"[{user_tag}] • {step_num}) {text}{status_icon}")
-        except:
-            pass
-        await asyncio.sleep(0.5)
-
-    temp_dir = tempfile.mkdtemp()
-    page = None
-
-    async with async_playwright() as p:
-        try:
-            # خيارات المتصفح لمنع الانهيار
-            args = [
-                "--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage", "--single-process", "--no-zygote", "--disable-gpu",
-                "--disable-software-rasterizer", "--disable-accelerated-2d-canvas", "--no-first-run",
-                "--no-default-browser-check", "--disable-infobars", "--disable-extensions",
-                "--disable-plugins", "--disable-sync", "--disable-translate", "--disable-default-apps",
-                "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-                "--disable-backgrounding-occluded-windows", "--mute-audio", "--hide-scrollbars",
-                "--metrics-recording-only", "--safebrowsing-disable-auto-update", "--renderer-process-limit=1",
-                "--js-flags=--max-old-space-size=512", "--window-size=1280,720"
-            ]
-
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir=temp_dir, headless=True, args=args,
-                viewport={"width": 1280, "height": 720}, locale="en-US"
-            )
-            page = context.pages[0] if context.pages else await context.new_page()
-            context.set_default_timeout(60000)
-            context.set_default_navigation_timeout(60000)
-
-            # 1) فتح الرابط
-            await set_step(1, "فتح رابط الطالب...")
-            await page.goto(sso_url, wait_until="domcontentloaded", timeout=60000)
+async def step3_enable_api(page, project_id, authuser):
+    api_url = f"https://console.cloud.google.com/apis/library/run.googleapis.com?project={project_id}&authuser={authuser}"
+    await page.goto(api_url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(2000)
+    
+    await handle_tos_dialog(page) # فحص الشروط
+    
+    enable_btn = page.get_by_role("button", name="Enable")
+    manage_btn = page.get_by_role("button", name="Manage")
+    disable_btn = page.get_by_text("Disable API") 
+    
+    try:
+        await expect(enable_btn.or_(manage_btn)).to_be_visible(timeout=15000)
+        if await enable_btn.is_visible():
+            await enable_btn.click()
             await page.wait_for_timeout(2500)
-
-            # 2) تخطي الشروط والترحيب
-            await set_step(2, "تخطي الشروط...")
-            try: await page.keyboard.press("Enter")
-            except: pass
-            try:
-                btn = page.locator("text='I understand'")
-                if await btn.is_visible(timeout=3000): await btn.click()
-            except: pass
-            try:
-                agree_btn = page.get_by_role("button", name="Agree and continue")
-                if await agree_btn.is_visible(timeout=3000):
-                    cbs = page.get_by_role("checkbox")
-                    cnt = await cbs.count()
-                    if cnt >= 2:
-                        await cbs.nth(0).click()
-                        await asyncio.sleep(0.5)
-                        await cbs.nth(1).click()
-                    await agree_btn.click()
-            except: pass
             
-            await set_step(2, "تخطي الشروط...", "✅")
-
-            # 3) الدخول للوحة التحكم
-            await set_step(3, f"(Project: {project_id})")
-            await page.wait_for_timeout(3000)
-
-            # 4 & 5) تفعيل Cloud Run API
-            await set_step(4, "تفعيل Cloud Run API...")
-            api_url = f"https://console.cloud.google.com/apis/library/run.googleapis.com?project={project_id}"
-            await page.goto(api_url, wait_until="domcontentloaded")
-            await page.wait_for_timeout(2000)
-
-            enable_btn = page.get_by_role("button", name="Enable")
-            manage_btn = page.get_by_role("button", name="Manage")
+            await handle_tos_dialog(page) # فحص الشروط مرة أخرى بعد التفعيل
             
             try:
-                await expect(enable_btn.or_(manage_btn)).to_be_visible(timeout=10000)
-                if await enable_btn.is_visible():
-                    await enable_btn.click()
-                    await page.wait_for_timeout(3000)
-                    # محاولة الضغط على Agree إذا ظهرت
-                    try: await page.get_by_role("button", name="Agree and continue").click(timeout=2000)
-                    except: pass
-            except:
-                pass # حتى لو لم نجده نكمل
+                await expect(manage_btn.or_(disable_btn)).to_be_visible(timeout=45000)
+            except Exception:
+                await handle_tos_dialog(page)
+                await expect(manage_btn.or_(disable_btn)).to_be_visible(timeout=20000)
+        elif await manage_btn.is_visible():
+            pass 
+    except Exception as e:
+         raise Exception(f"عطل في إيجاد زر تفعيل الـ API: {str(e)}")
 
-            await set_step(5, "API مؤكد، متابعة...", "⚠️")
-
-            # 6 & 7) فتح Cloud Run
-            await set_step(6, "فتح Cloud Run...")
-            run_url = f"https://console.cloud.google.com/run/create?project={project_id}"
-            await page.goto(run_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(5000)
-            await set_step(7, "تم فتح الصفحة", "✅")
-
-            # 8 & 9) تعبئة الحقول
-            await set_step(8, "تعبئة الحقول...")
-            try:
-                label = page.get_by_text("Container Image URL").first
-                await label.click(timeout=10000)
-            except:
-                try: await page.locator('input[type="text"]').first.click(timeout=5000)
-                except: pass
-
-            await page.wait_for_timeout(500)
-            await page.keyboard.type("docker.io/ajndjd2/ahmed-vip1", delay=30)
-            await page.wait_for_timeout(2000)
-
-            try: await page.get_by_role("radio", name="Allow public access").click(timeout=8000)
-            except: pass
-            try: await page.get_by_role("radio", name="Instance-based").click(timeout=8000)
-            except: pass
-            try: await page.get_by_role("button", name="Hide").click(timeout=2000)
-            except: pass
-            
-            await page.keyboard.press("End")
-            await set_step(9, "اكتملت الحقول", "✅")
-
-            # 10 & 11) إنشاء الخدمة
-            await set_step(10, "Create الخدمة...")
-            await page.wait_for_timeout(1000)
-            try:
-                create_btn = page.get_by_role("button", name="Create")
-                await create_btn.click(force=True, timeout=10000)
-            except:
-                pass
-            await set_step(11, "Create", "✅")
-
-            # 12) انتظار الرابط
-            await set_step(12, "انتظار رابط النشر...")
-            link_locator = page.locator('a[href*="run.app"]')
-            final_url = None
-            try:
-                await link_locator.wait_for(state="visible", timeout=120000)
-                final_url = await link_locator.get_attribute("href")
-            except:
-                # محاولة ثانية عبر الجافا سكريبت
-                for _ in range(40):
-                    try:
-                        url = await page.evaluate("""
-                            () => {
-                                for (const a of document.querySelectorAll('a')) {
-                                    if (a.href.includes('.run.app')) return a.href.split('?')[0];
-                                }
-                                return null;
-                            }
-                        """)
-                        if url:
-                            final_url = url
-                            break
-                    except: pass
-                    await page.wait_for_timeout(3000)
-
-            if not final_url:
-                raise Exception("لم يتم العثور على رابط run.app")
-
-            domain = extract_domain(final_url)
-
-            # النجاح - إرسال الرسالة النهائية
-            vless_link = f"vless://ffff6667-7777-4555-8aaa-5555a7777fff@{domain}:443?encryption=none&security=tls&sni=youtube.com&fp=chrome&type=ws&host={domain}&path=%2FTelegram%2F%40IJ77m%2F%40zxhv67#GCP-Xray"
-            
-            await msg.edit(
-                f"[{user_tag}] • 🎉 تم النشر!\n\n"
-                f"🔗 **الرابط:**\n`{final_url}`\n\n"
-                f"📋 **VLESS:**\n`{vless_link}`",
-                parse_mode='md'
-            )
-
-            # إرسال ملفات الـ Dark الثلاثة
-            for dark in DARK_FILES:
-                new_uri = build_darktunnel_uri(dark["uri"], domain)
-                if new_uri:
-                    filename = f"{dark['name']} - {domain}.dark"
-                    bio = io.BytesIO(new_uri.encode("utf-8"))
-                    bio.name = filename
-                    await client.send_file(
-                        chat_id, bio, force_document=True,
-                        attributes=[DocumentAttributeFilename(filename)],
-                        caption=f"✅ {dark['name']}"
-                    )
-
-        except Exception as e:
-            await safe_screenshot(page, chat_id, str(e), msg)
-        finally:
-            if 'context' in locals():
-                await context.close()
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-# ===============================
-# ⚙️ معالج الطابور الرئيسي
-# ===============================
-async def queue_worker(chat_id):
-    global is_processing
-    if is_processing or job_queue.empty():
-        return
+async def step4_create_cloud_run(page, project_id, authuser):
+    run_url = f"https://console.cloud.google.com/run/create?project={project_id}&authuser={authuser}"
+    await page.goto(run_url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(5000)
     
-    is_processing = True
-    while not job_queue.empty():
-        job = await job_queue.get()
-        try:
-            await process_sso(job["chat_id"], job["url"], job["user_tag"], job["msg"])
-        except Exception as e:
-            print(f"Queue Error: {e}")
-        finally:
-            job_queue.task_done()
-            # انتظار بسيط بين المهام
-            await asyncio.sleep(2)
+    try:
+        label = page.get_by_text("Container Image URL").first
+        await label.click()
+        await page.wait_for_timeout(500)
+        await page.keyboard.type("docker.io/ajndjd2/ahmed-vip1", delay=50)
+    except Exception as e:
+        raise Exception(f"فشل في الضغط وكتابة الرابط: {str(e)}")
+    
+    await page.wait_for_timeout(3000)
+    await handle_tos_dialog(page)
+    
+    try:
+        await page.get_by_role("radio", name="Allow public access").click()
+        await page.get_by_role("radio", name="Instance-based").click()
+        try: await page.get_by_role("button", name="Hide").click(timeout=2000)
+        except: pass
             
-    is_processing = False
+        await page.keyboard.press("End")
+        await page.wait_for_timeout(1000)
+        
+        create_btn = page.get_by_role("button", name="Create")
+        await create_btn.click(force=True)
+    except Exception as e:
+        raise Exception(f"فشل في اختيار الإعدادات أو ضغط Create: {str(e)}")
 
-# ===============================
+async def step5_get_deployed_url(page):
+    link_locator = page.locator('a[href*="run.app"]')
+    await link_locator.wait_for(state="visible", timeout=120000) 
+    final_url = await link_locator.get_attribute("href")
+    return final_url
+
+# ==========================================
+# 🎯 المعالج الرئيسي
+# ==========================================
+async def process_sso_link(chat_id, sso_url):
+    async with browser_lock: # قفل لمنع تداخل المتصفحات
+        project_id = extract_project_id(sso_url)
+        if not project_id:
+            await client.send_message(chat_id, "❌ لم يتم العثور على Project ID في الرابط.")
+            return
+
+        await client.send_message(chat_id, "⏳ 𝙡𝙚𝙩 𝙢𝙚 𝙨𝙚𝙚 𝙬𝙝𝙖𝙩 𝙄 𝙘𝙖𝙣 𝙙𝙤...")
+        temp_dir = tempfile.mkdtemp()
+        page = None
+        
+        async with async_playwright() as p:
+            try:
+                # تشغيل المتصفح بوضع visible (لأنك تستخدم Xvfb)
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=temp_dir,
+                    channel='chrome',
+                    headless=False,
+                    args=[
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-infobars',
+                        '--window-size=1920,1080'
+                    ],
+                    viewport={'width': 1920, 'height': 1080},
+                    locale='en-US'
+                )
+                
+                page = context.pages[0] if context.pages else await context.new_page()
+                
+                await page.goto(sso_url, wait_until="domcontentloaded", timeout=60000)
+                
+                await client.send_message(chat_id, "🔄 𝙎𝙩𝙚𝙥 𝙤𝙣𝙚...")
+                await step1_welcome_screen(page)
+                
+                await client.send_message(chat_id, "⏳ 𝙩𝙖𝙠𝙞𝙣𝙜 𝙖 𝙘𝙞𝙜𝙖𝙧𝙚𝙩𝙩𝙚 𝙛𝙞𝙧𝙨𝙩...")
+                await page.wait_for_url("**/home/dashboard**", timeout=45000)
+                
+                current_qs = parse_qs(urlparse(page.url).query)
+                authuser = current_qs.get('authuser', ['1'])[0]
+                
+                await client.send_message(chat_id, f"🔄 𝙉𝙤𝙬 𝙨𝙩𝙚𝙥 𝙩𝙬𝙤...")
+                await step2_tos_and_country(page)
+                
+                await client.send_message(chat_id, "🔄 𝙎𝙩𝙚𝙥 𝙩𝙝𝙧𝙚𝙚 𝙖𝙨 𝙛𝙖𝙨𝙩 𝙖𝙨 𝙄 𝙘𝙖𝙣 𝙗𝙧𝙤 ...")
+                await step3_enable_api(page, project_id, authuser)
+                
+                await client.send_message(chat_id, "🔄 𝙣𝙤𝙬 𝙩𝙝𝙚 𝙧𝙚𝙖𝙡 𝙟𝙤𝙗: 𝙎𝙩𝙚𝙥 𝙛𝙤𝙪𝙧...")
+                await step4_create_cloud_run(page, project_id, authuser)
+                
+                await client.send_message(chat_id, "⏳ 𝙬𝙖𝙞𝙩, 𝙟𝙪𝙨𝙩 𝙤𝙣𝙚 𝙘𝙞𝙜𝙖𝙧𝙚𝙩𝙩𝙚...")
+                final_url = await step5_get_deployed_url(page)        
+                domain = extract_domain_from_service_url(final_url)
+                
+                await client.send_message(chat_id, f"✅ **𝙃𝙚𝙧𝙚 𝙮𝙤𝙪 𝙜𝙤 𝙗𝙧𝙤**\n\n 𝙙𝙤𝙢𝙖𝙞𝙣 :\n `{domain}`", parse_mode='md')
+                
+                # إرسال ملفات Dark الثلاثة
+                for dark in DARK_FILES:
+                    new_uri = build_darktunnel_uri_with_host(dark["uri"], domain)
+                    if new_uri:
+                        safe_domain = "".join(c for c in domain.lower() if c.isalnum() or c in ".-_")[:40]
+                        tg_fname = f"{dark['name']} - {safe_domain}.dark"
+                        bio = io.BytesIO(new_uri.encode("utf-8"))
+                        bio.name = tg_fname 
+                        await client.send_file(
+                            chat_id,
+                            bio,
+                            force_document=True,
+                            attributes=[DocumentAttributeFilename(tg_fname)],
+                            caption=f"✅ ملف {dark['name']} جاهز."
+                        )
+                
+            except PlaywrightTimeoutError as e:
+                await handle_error(page, chat_id, "انتهى وقت الانتظار (Timeout)", str(e))
+            except Exception as e:
+                await handle_error(page, chat_id, "خطأ عام", str(e))
+            finally:
+                if 'context' in locals():
+                    await context.close()
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+# ==========================================
 # 📩 استقبال الرسائل
-# ===============================
+# ==========================================
 @client.on(events.NewMessage(pattern=r"^/start$"))
 async def start(event):
-    await event.reply("أرسل رابط SSO الخاص بـ Google Skills، وسأقوم برفعه على Cloud Run.")
+    welcome_msg = (
+        "**إذا غامَرْتَ في شَرَفٍ مَرُومِ  ***  فَلا تَقنَعْ بما دونَ النّجومِ** ☁️✨\n\n"
+        "⏳ **الوقت:** 4 ساعات و 30 دقيقة\n"
+        "🔗 **الرابط:**\n"
+        "https://www.cloudskillsboost.google/focuses/20774?parent=catalog\n\n"
+        "⏳ **الوقت:** 3 ساعات\n"
+        "🔗 **الرابط:**\n"
+        "https://www.skills.google/focuses/82384?parent=catalog\n\n"
+        "@AM2_D3"
+    )
+    await event.reply(welcome_msg)
 
 @client.on(events.NewMessage(pattern=r'https://www\.skills\.google/google_sso.*'))
 async def handler(event):
-    sso_url = event.text.strip()
-    user = await event.get_sender()
-    user_tag = f"@{user.username}" if getattr(user, 'username', None) else f"@{user.first_name}"
-    
-    # إرسال رسالة الاستلام
-    msg = await event.reply(f"📥 تم استلام الرابط رقم {job_queue.qsize() + 1}. وسيبدأ الآن.\nيمكنك إرسال رابط آخر وسيضاف إلى الطابور تلقائياً.")
-    
-    # إضافة المهمة للطابور
-    await job_queue.put({
-        "chat_id": event.chat_id,
-        "url": sso_url,
-        "user_tag": user_tag,
-        "msg": msg
-    })
-    
-    # تشغيل العامل إذا لم يكن يعمل
-    asyncio.create_task(queue_worker(event.chat_id))
+    sso_url = event.text
+    asyncio.create_task(process_sso_link(event.chat_id, sso_url))
 
 print("𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙...")
 client.run_until_disconnected()
