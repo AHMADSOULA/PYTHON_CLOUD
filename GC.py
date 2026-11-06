@@ -13,10 +13,10 @@ import tempfile
 import shutil
 
 #===============================
-# ⚠️ قم بوضع بياناتك هنا بعد تغيير التوكن من BotFather
-API_ID = 35339972  # <--- ضع الـ API_ID الخاص بك
-API_HASH = 'fcbb29c0cdd4fbeb66ba017020e721cc' # <--- ضع الـ API_HASH الخاص بك
-BOT_TOKEN = '9276555712:AAFArpLu5l1pomVLQ9zE54YjMfna1Z0NEys' # <--- ضع التوكن الجديد
+# 🚨 تحذير: قم بتغيير التوكن من BotFather فوراً لأنه تسرب
+API_ID = 35339972  
+API_HASH = 'fcbb29c0cdd4fbeb66ba017020e721cc' 
+BOT_TOKEN = '9276555712:AAFArpLu5l1pomVLQ9zE54YjMfna1Z0NEys' 
 
 client = TelegramClient('DDarkNetConfigs_1', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
@@ -251,7 +251,6 @@ def extract_project_id(url):
     return match.group(1) if match else None
 
 async def handle_tos_dialog(page):
-    """التعامل مع نافذة الشروط إذا ظهرت فجأة"""
     agree_btn = page.get_by_role("button", name="Agree and continue")
     try:
         if await agree_btn.is_visible(timeout=4000):
@@ -277,10 +276,8 @@ async def step1_welcome_screen(page):
     try: await page.wait_for_load_state("networkidle", timeout=10000)
     except: pass
     await page.wait_for_timeout(2000)    
-    
     try: await page.keyboard.press("Enter")
     except: pass
-    
     try:
         button = page.locator("text='I understand'")
         if await button.is_visible(timeout=3000):
@@ -370,9 +367,10 @@ async def process_sso_link(chat_id, sso_url):
     
     async with async_playwright() as p:
         try:
+            # ✅ تم تعديل headless إلى True لحل المشكلة
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=temp_dir,
-                headless=False, # يعمل مع Xvfb في سيرفرك
+                headless=True, 
                 args=[
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
